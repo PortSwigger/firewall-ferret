@@ -42,39 +42,41 @@ public static HttpRequest build(HttpRequest request, String bullet) {
 //-----------------------------------------------------------------------------
 private static HttpRequest addBodyParam(HttpRequest request, String bullet) {
   String param = "bullet=";
-  StringBuilder payload = new StringBuilder();
-  payload.append(param);
-  payload.append(bullet, 0, bullet.length() - param.length() + 1);
-  payload.append("&");
-  
-  String strBody = request.bodyToString();
-  payload.append(strBody);
-  
-  return request.withBody(payload.toString());
+  String sep   = "&";
+  int trimLen  = Math.max(0, bullet.length() - param.length() - sep.length());
+  return request.withBody(param + bullet.substring(0, trimLen) + sep + request.bodyToString());
 }
 
 //-----------------------------------------------------------------------------
 private static HttpRequest addJsonParam(HttpRequest request, String bullet) {
-  String prepend = "{\"bullet\": \"";
-  String append  = "\",";
-  StringBuilder payload = new StringBuilder();
-  payload.append(prepend);
-  payload.append(bullet, 0, bullet.length() - prepend.length() + append.length());
-  payload.append(append);
-  
-  String strBody = request.bodyToString();
-  payload.append(strBody, 1, strBody.length()); // skipping starting '{'
-  
-  return request.withBody(payload.toString());
+  String strBody = request.bodyToString().trim();
+
+  if (strBody.startsWith("{")) {
+    // JSON object: insert bullet as first property
+    String prepend = "{\"bullet\": \"";
+    String append  = "\",";
+    int trimLen = Math.max(0, bullet.length() - prepend.length() - append.length());
+    return request.withBody(prepend + bullet.substring(0, trimLen) + append + strBody.substring(1));
+  }
+  else if (strBody.startsWith("[")) {
+    // JSON array: insert bullet as first element
+    String prepend = "[\"";
+    String append  = "\",";
+    int trimLen = Math.max(0, bullet.length() - prepend.length() - append.length());
+    return request.withBody(prepend + bullet.substring(0, trimLen) + append + strBody.substring(1));
+  }
+  else {
+    // Unknown JSON shape — best effort: prepend raw
+    return bestEffort(request, bullet);
+  }
 }
 
 //-----------------------------------------------------------------------------
 private static HttpRequest addXmlParam(HttpRequest request, String bullet) {
   String prepend = "<!--";
   String append  = "-->";
-  String payload = prepend +
-    bullet.substring(0, bullet.length() - prepend.length() + 3) +
-    append;
+  int trimLen    = Math.max(0, bullet.length() - prepend.length() - append.length());
+  String payload = prepend + bullet.substring(0, trimLen) + append;
   
   String xml = request.bodyToString();
   
@@ -98,25 +100,23 @@ private static HttpRequest addXmlParam(HttpRequest request, String bullet) {
 
 //-----------------------------------------------------------------------------
 private static HttpRequest addMultiPartParam(HttpRequest request, String bullet) {
-  // Extract the boundary
-  String boundary = extractBoundary(request.toString());
-  
-  // Create the new parameter part
-  String newParameterPart = "--" + boundary + "\r\n" +
-    "Content-Disposition: form-data; name=\"bullet\"\r\n\r\n" +
-    bullet + "\r\n";
-  
+  String boundary   = extractBoundary(request);
+  String partOpen   = "--" + boundary + "\r\n";
+  String partHeader = "Content-Disposition: form-data; name=\"bullet\"\r\n\r\n";
+  String partClose  = "\r\n";
+  int trimLen = Math.max(0, bullet.length() - partOpen.length() - partHeader.length() - partClose.length());
+  String newParameterPart = partOpen + partHeader + bullet.substring(0, trimLen) + partClose;
   return request.withBody(newParameterPart + request.bodyToString());
 }
 
 //-----------------------------------------------------------------------------
-private static String extractBoundary(String request) {
-  String contentTypeHeader = "Content-Type: multipart/form-data; boundary=";
-  int boundaryIndex = request.indexOf(contentTypeHeader);
-  if (boundaryIndex != -1) {
-    int start = boundaryIndex + contentTypeHeader.length();
-    int end = request.indexOf("\r\n", start);
-    return request.substring(start, end);
+private static String extractBoundary(HttpRequest request) {
+  String contentType = request.headerValue("Content-Type");
+  if (contentType != null) {
+    int idx = contentType.indexOf("boundary=");
+    if (idx != -1) {
+      return contentType.substring(idx + "boundary=".length());
+    }
   }
   throw new IllegalArgumentException("Boundary not found in the request.");
 }
